@@ -7,6 +7,9 @@ attention backend registry by
 
 ## Setting the Attention Backend
 
+Optional backends can require additional dependencies. For B12X installation,
+selection, and compatibility details, see [B12X Backends](../features/quantization/b12x.md).
+
 ### Command Line
 
 There are two ways to specify the backend from the command line:

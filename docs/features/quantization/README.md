@@ -23,6 +23,9 @@ The following are the supported quantization formats for vLLM:
 - [TorchAO](torchao.md)
 - [FP8 ViT Encoder Attention](fp8_vit_attn.md)
 
+Optional kernel integrations are documented separately, including the
+[B12X backends](b12x.md) for NVIDIA SM120 and SM121 GPUs.
+
 ## Supported Hardware
 
 The table below shows the compatibility of various quantization implementations with different hardware platforms in vLLM:
