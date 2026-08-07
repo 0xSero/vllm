@@ -40,6 +40,7 @@ from vllm.model_executor.layers.fused_moe.oracle.int8 import (
     select_int8_moe_backend,
 )
 from vllm.model_executor.layers.fused_moe.oracle.mxfp4 import (
+    B12X_BACKENDS,
     TRITON_BACKENDS,
     Mxfp4MoeBackend,
     backend_to_kernel_cls,
@@ -50,6 +51,7 @@ from vllm.model_executor.layers.fused_moe.oracle.mxfp4 import (
     select_mxfp4_moe_backend,
 )
 from vllm.model_executor.layers.fused_moe.oracle.nvfp4 import (
+    NvFp4MoeBackend,
     convert_to_nvfp4_moe_kernel_format,
     make_nvfp4_moe_kernel,
     make_nvfp4_moe_quant_config,
@@ -1334,6 +1336,8 @@ class QuarkOCP_MX_MoEMethod(QuarkMoEMethod):
                 experts_cls=self.experts_cls,
                 routing_tables=layer._expert_routing_tables(),
             )
+            if self.mxfp4_backend in B12X_BACKENDS:
+                self.moe_kernel.fused_experts.process_weights_after_loading(layer)
 
     def get_fused_moe_quant_config(
         self, layer: RoutedExperts
@@ -1646,6 +1650,8 @@ class QuarkNvfp4MoEMethod(QuarkMoEMethod):
                 backend=self.nvfp4_backend,
                 routing_tables=layer._expert_routing_tables(),
             )
+            if self.nvfp4_backend == NvFp4MoeBackend.B12X:
+                self.moe_kernel.fused_experts.process_weights_after_loading(layer)
 
     def get_fused_moe_quant_config(
         self, layer: torch.nn.Module

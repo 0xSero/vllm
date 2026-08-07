@@ -121,6 +121,7 @@ class IrOpPriorityConfig:
 
 MoEBackend = Literal[
     "auto",
+    "b12x",
     "triton",
     "batched_triton",
     "deep_gemm",
@@ -193,7 +194,7 @@ class KernelConfig:
     """Backend for MoE expert computation kernels. Available options:
 
     - "auto": Automatically select the best backend based on model and hardware
-    - "b12x": Use B12X kernels for SM12x FP8 and FP4 linear layers
+    - "b12x": Use native B12X FP4 MoE kernels on SM12x
     - "triton": Use Triton-based fused MoE kernels
     - "batched_triton": Use batched Triton experts (moe_mmk) on the batched
       activation format ([E_local, max_num_tokens, K])
@@ -219,6 +220,7 @@ class KernelConfig:
     """Backend for quantized linear layer GEMM kernels. Available options:
 
     - "auto": Automatically select the best backend based on model and hardware
+    - "b12x": Use native B12X FP8 and FP4 linear kernels on SM12x
     - "cutlass": Use CUTLASS-based kernels
     - "flashinfer_cutlass": Use FlashInfer with CUTLASS kernels
     - "flashinfer_cutedsl": Use FlashInfer with CuTe-DSL kernels (NVFP4, MXFP8)

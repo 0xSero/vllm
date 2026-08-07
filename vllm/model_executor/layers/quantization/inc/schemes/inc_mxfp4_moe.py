@@ -24,15 +24,20 @@ from vllm.model_executor.layers.fused_moe.fused_moe_method_base import (
     FusedMoEMethodBase,
 )
 from vllm.model_executor.layers.fused_moe.oracle.mxfp4 import (
+    B12X_BACKENDS,
     Mxfp4MoeBackend,
     make_mxfp4_moe_kernel,
     make_mxfp4_moe_quant_config,
     select_mxfp4_moe_backend,
 )
+from vllm.model_executor.layers.quantization.mxfp4 import (
+    _mxfp4_realign_w2_fp4_e8m0_to_local_k32,
+    _mxfp4_w2_scale_cols_for_rank,
+)
 from vllm.model_executor.layers.quantization.utils.marlin_utils_fp4 import (
     prepare_moe_fp4_layer_for_marlin,
 )
-from vllm.model_executor.utils import set_weight_attrs
+from vllm.model_executor.utils import replace_parameter, set_weight_attrs
 from vllm.platforms import current_platform
 
 logger = init_logger(__name__)
@@ -61,7 +66,10 @@ class INCMxfp4MoEMethod(FusedMoEMethodBase):
         self.use_cutlass_mxfp4 = CutlassExpertsMxfp4._supports_current_device()
         self.mxfp4_backend = Mxfp4MoeBackend.MARLIN
         self.experts_cls: type[mk.FusedMoEExperts] | None = None
-        if self.use_cutlass_mxfp4:
+        if getattr(moe, "moe_backend", "auto") == "b12x":
+            self.mxfp4_backend, self.experts_cls = select_mxfp4_moe_backend(moe)
+            self.use_cutlass_mxfp4 = False
+        elif self.use_cutlass_mxfp4:
             self.experts_cls = CutlassExpertsMxfp4
             logger.info_once("Using CutlassExpertsMxfp4 for AutoRound MXFP4 MoE")
         elif current_platform.is_xpu():
@@ -83,6 +91,7 @@ class INCMxfp4MoEMethod(FusedMoEMethodBase):
     ) -> None:
         layer.num_experts = num_experts
         layer.params_dtype = params_dtype
+        self.intermediate_size = intermediate_size_per_partition
 
         # gate + up fused on the output dim; two FP4 packed per input byte.
         w13_weight = torch.nn.Parameter(
@@ -125,17 +134,33 @@ class INCMxfp4MoEMethod(FusedMoEMethodBase):
         )
         set_weight_attrs(w13_weight_scale, extra_weight_attrs)
 
+        w2_scale_cols = intermediate_size_per_partition // self.group_size
+        if self.mxfp4_backend in B12X_BACKENDS:
+            w2_scale_cols = _mxfp4_w2_scale_cols_for_rank(
+                intermediate_size_per_partition,
+                self.moe.moe_parallel_config.tp_rank,
+                self.group_size,
+            )
         w2_weight_scale = torch.nn.Parameter(
             torch.empty(
                 num_experts,
                 hidden_size,
-                intermediate_size_per_partition // self.group_size,
+                w2_scale_cols,
                 dtype=torch.uint8,
             ),
             requires_grad=False,
         )
         layer.register_parameter("w2_weight_scale", w2_weight_scale)
         set_weight_attrs(w2_weight_scale, extra_weight_attrs)
+        if self.mxfp4_backend in B12X_BACKENDS:
+            tp_rank = self.moe.moe_parallel_config.tp_rank
+            w2_weight_scale.w2_scale_group_size = self.group_size
+            w2_weight_scale.w2_scale_logical_shard_size = (
+                intermediate_size_per_partition
+            )
+            w2_weight_scale.w2_scale_element_offset = (
+                intermediate_size_per_partition * tp_rank
+            ) % self.group_size
 
     def get_fused_moe_quant_config(
         self, layer: torch.nn.Module
@@ -146,7 +171,7 @@ class INCMxfp4MoEMethod(FusedMoEMethodBase):
                 w1_scale=layer.w13_weight_scale,
                 w2_scale=layer.w2_weight_scale,
             )
-        # Weight-only (Marlin) or native XPU kernel.
+        # Native packed-layout backends or weight-only Marlin.
         return make_mxfp4_moe_quant_config(
             mxfp4_backend=self.mxfp4_backend,
             w1_scale=layer.w13_weight_scale,
@@ -194,6 +219,19 @@ class INCMxfp4MoEMethod(FusedMoEMethodBase):
             layer.w2_weight_scale = torch.nn.Parameter(
                 torch.stack(swizzled_w2), requires_grad=False
             )
+        elif self.mxfp4_backend in B12X_BACKENDS:
+            w2, w2_scale = _mxfp4_realign_w2_fp4_e8m0_to_local_k32(
+                layer.w2_weight,
+                layer.w2_weight_scale,
+                logical_k=self.intermediate_size,
+                source_k_offset=getattr(
+                    layer.w2_weight_scale,
+                    "w2_scale_element_offset",
+                    0,
+                ),
+            )
+            replace_parameter(layer, "w2_weight", w2)
+            replace_parameter(layer, "w2_weight_scale", w2_scale)
         elif current_platform.is_xpu():
             # The XPU fused-MoE kernel consumes the packed layout directly; no
             # swizzle / repack / transpose is required.
@@ -216,6 +254,8 @@ class INCMxfp4MoEMethod(FusedMoEMethodBase):
                 mxfp4_backend=self.mxfp4_backend,
                 routing_tables=layer._expert_routing_tables(),
             )
+            if self.mxfp4_backend in B12X_BACKENDS:
+                self.moe_kernel.fused_experts.process_weights_after_loading(layer)
 
     def apply(
         self,
