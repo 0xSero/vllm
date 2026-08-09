@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from vllm.model_executor.layers.fused_moe.routed_experts import (
         RoutedExperts,
     )
+    from vllm.model_executor.layers.quantization import QuantizationConfig
 
     from ..nvfp4 import InklingNvfp4Config
 
@@ -415,6 +416,7 @@ class InklingMoE(nn.Module):
         layer_id: int,
         *,
         prefix: str = "",
+        quant_config: QuantizationConfig | None = None,
         nvfp4_config: InklingNvfp4Config | None = None,
     ) -> None:
         super().__init__()
@@ -437,7 +439,9 @@ class InklingMoE(nn.Module):
         )
 
         moe_quant_config = None
-        if nvfp4_config is not None and nvfp4_config.experts_quantized(layer_id):
+        if quant_config is not None and quant_config.get_name() == "exl3":
+            moe_quant_config = quant_config
+        elif nvfp4_config is not None and nvfp4_config.experts_quantized(layer_id):
             from vllm.model_executor.layers.quantization.modelopt import (
                 ModelOptNvFp4Config,
             )

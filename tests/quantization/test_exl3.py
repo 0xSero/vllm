@@ -118,6 +118,35 @@ def test_rank_sliced_metadata_admits_only_declared_moe_layers():
     )
 
 
+def test_rank_sliced_metadata_accepts_k2_layer_payloads(monkeypatch):
+    metadata = _rank_sliced_metadata(
+        bits="mixed",
+        bits_per_expert="layer_bitrates.json:k",
+        k_values=[2, 3],
+        experts_per_layer=2,
+        moe_layers=[3, 4],
+    )
+    payload = {
+        "3": {"k": [2, 2]},
+        "4": {"k": [3, 3]},
+    }
+    monkeypatch.setattr(
+        exl3_module,
+        "get_hf_file_to_dict",
+        lambda filename, model_name, revision=None: payload,
+    )
+    config = Exl3Config()
+
+    config.maybe_update_config(
+        "unused",
+        SimpleNamespace(hybrid_tr3_tail=metadata, _commit_hash="revision"),
+    )
+
+    assert config.rank_sliced_k_values == (2, 3)
+    assert config.rank_sliced_layer_bitrates("model.layers.3.mlp.experts") == (2, 2)
+    assert config.rank_sliced_layer_bitrates("model.layers.4.mlp.experts") == (3, 3)
+
+
 def test_mixed_rank_sliced_metadata_hydrates_per_layer_bitrates(monkeypatch):
     metadata = _rank_sliced_metadata(
         bits="mixed",

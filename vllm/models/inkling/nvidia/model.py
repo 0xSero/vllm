@@ -20,6 +20,9 @@ from vllm.distributed import (
     tensor_model_parallel_reduce_scatter,
 )
 from vllm.forward_context import get_forward_context
+from vllm.model_executor.layers.fused_moe import (
+    fused_moe_make_expert_params_mapping,
+)
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.model_executor.layers.vocab_parallel_embedding import ParallelLMHead
 from vllm.model_executor.models.interfaces import (
@@ -49,6 +52,7 @@ from vllm.sequence import IntermediateTensors
 from ..configs import InklingMMConfig, InklingModelConfig
 from ..nvfp4 import InklingNvfp4Config
 from .attention import InklingAttention, compute_log_scaling_tau
+from .exl3_loading import load_rank_sliced_expert_weight
 from .layernorm import InklingRMSNorm
 from .logits_processor import InklingLogitsProcessor
 from .mlp import InklingDenseMLP
@@ -179,6 +183,7 @@ class InklingDecoderLayer(nn.Module):
                 config,
                 layer_id,
                 prefix=f"{prefix}.mlp",
+                quant_config=quant_config,
                 nvfp4_config=nvfp4_config,
             )
 
@@ -407,6 +412,7 @@ class _TmlForCausalLMBase(nn.Module, SupportsPP, SupportsLoRA):
         prefix: str,
     ) -> None:
         quant_config = vllm_config.quant_config
+        self.quant_config = quant_config
         self.config = text_config
         # NVFP4 experts are detected directly from the checkpoint quant config;
         # only the MoE experts are quantized (attention/dense MLP stay bf16).
@@ -647,9 +653,30 @@ def _load_inkling_weights(
     tp_size = get_tensor_model_parallel_world_size()
     tp_rank = get_tensor_model_parallel_rank()
     local_ids = set(config.local_layer_ids)
+    params_dict = dict(module.named_parameters())
+    rank_sliced_name = getattr(
+        getattr(module, "quant_config", None),
+        "normalize_rank_sliced_weight_name",
+        None,
+    )
+    expert_params_mapping = (
+        fused_moe_make_expert_params_mapping(
+            module,
+            ckpt_gate_proj_name="gate_proj",
+            ckpt_down_proj_name="down_proj",
+            ckpt_up_proj_name="up_proj",
+            num_experts=config.n_routed_experts,
+        )
+        if rank_sliced_name is not None
+        else ()
+    )
 
     def _iter_loadable_weights() -> Iterable[tuple[str, torch.Tensor]]:
         for name, weight in module.hf_to_vllm_mapper.apply(weights):
+            if rank_sliced_name is not None:
+                name = rank_sliced_name(name)
+                if name is None:
+                    continue
             shard_id = getattr(weight, "shard_id", None)
             # Replicate K/V conv-free GQA heads when tp_size > num_kv_heads.
             if (
@@ -676,6 +703,22 @@ def _load_inkling_weights(
             moe_match = _MOE_EXPERT_WEIGHT_RE.match(name)
             if moe_match is not None and moe_match.group("mlp") in moe_modules:
                 moe = moe_modules[moe_match.group("mlp")]
+                if rank_sliced_name is not None and not name.startswith(
+                    f"{moe_match.group('mlp')}.shared_experts."
+                ):
+                    mapped_name = load_rank_sliced_expert_weight(
+                        name,
+                        weight,
+                        params_dict,
+                        expert_params_mapping,
+                    )
+                    if mapped_name is None:
+                        raise ValueError(
+                            "rank-sliced Inkling EXL3 tensor did not map to a "
+                            f"routed-expert parameter: {name}"
+                        )
+                    loaded.add(mapped_name)
+                    continue
                 for rel in moe.load_expert_weight(moe_match.group("rest"), weight):
                     loaded.add(f"{moe_match.group('mlp')}.{rel}")
                 continue
