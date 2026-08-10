@@ -3,6 +3,18 @@ import os
 from vllm.model_executor.model_loader import weight_utils
 
 
+def test_safetensors_load_device_defaults_to_cpu(monkeypatch) -> None:
+    monkeypatch.delenv("SAFETENSORS_LOAD_DEVICE", raising=False)
+
+    assert weight_utils._safetensors_load_device() == "cpu"
+
+
+def test_safetensors_load_device_uses_override(monkeypatch) -> None:
+    monkeypatch.setenv("SAFETENSORS_LOAD_DEVICE", "cuda:0")
+
+    assert weight_utils._safetensors_load_device() == "cuda:0"
+
+
 def test_page_cache_eviction_is_opt_in(tmp_path, monkeypatch) -> None:
     path = tmp_path / "weights.safetensors"
     path.write_bytes(b"weights")

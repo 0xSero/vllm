@@ -1039,7 +1039,11 @@ def safetensors_weights_iterator(
                 )
             yield from unflattened_state_dict.items()
         else:
-            with safe_open(st_file, framework="pt") as f:
+            with safe_open(
+                st_file,
+                framework="pt",
+                device=_safetensors_load_device(),
+            ) as f:
                 for name in f.keys():  # noqa: SIM118
                     if weight_name_prefixes and not _matches_weight_name_prefixes(
                         name, weight_name_prefixes
@@ -1050,6 +1054,10 @@ def safetensors_weights_iterator(
                     param = f.get_tensor(name)
                     yield name, param
         _drop_safetensors_page_cache(st_file)
+
+
+def _safetensors_load_device() -> str:
+    return os.environ.get("SAFETENSORS_LOAD_DEVICE", "cpu")
 
 
 def _drop_safetensors_page_cache(path: str) -> None:
