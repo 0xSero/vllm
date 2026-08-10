@@ -1247,7 +1247,7 @@ class Exl3MoEParameter(BasevLLMParameter):
                 "rank-sliced EXL3 tensor shape changed within one slab: "
                 f"expected={tuple(target.shape)}, got={tuple(loaded_weight.shape)}"
             )
-        target.copy_(loaded_weight, non_blocking=True)
+        target.copy_(loaded_weight, non_blocking=False)
         self.exl3_tensors[key] = target
 
 
