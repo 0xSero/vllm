@@ -15,6 +15,42 @@ def test_safetensors_load_device_uses_override(monkeypatch) -> None:
     assert weight_utils._safetensors_load_device() == "cuda:0"
 
 
+def test_safetensors_load_cache_release_skips_cpu(monkeypatch) -> None:
+    calls = []
+    monkeypatch.delenv("SAFETENSORS_LOAD_DEVICE", raising=False)
+    monkeypatch.setattr(
+        weight_utils.torch.accelerator,
+        "empty_cache",
+        lambda: calls.append("empty"),
+    )
+
+    weight_utils._release_safetensors_load_cache()
+
+    assert calls == []
+
+
+def test_safetensors_load_cache_release_synchronizes_device(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setenv("SAFETENSORS_LOAD_DEVICE", "cuda:0")
+    monkeypatch.setattr(
+        weight_utils.torch.accelerator,
+        "synchronize",
+        lambda device: calls.append(("synchronize", device)),
+    )
+    monkeypatch.setattr(
+        weight_utils.torch.accelerator,
+        "empty_cache",
+        lambda: calls.append(("empty", None)),
+    )
+
+    weight_utils._release_safetensors_load_cache()
+
+    assert calls == [
+        ("synchronize", weight_utils.torch.device("cuda:0")),
+        ("empty", None),
+    ]
+
+
 def test_page_cache_eviction_is_opt_in(tmp_path, monkeypatch) -> None:
     path = tmp_path / "weights.safetensors"
     path.write_bytes(b"weights")

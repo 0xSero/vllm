@@ -1054,10 +1054,19 @@ def safetensors_weights_iterator(
                     param = f.get_tensor(name)
                     yield name, param
         _drop_safetensors_page_cache(st_file)
+        _release_safetensors_load_cache()
 
 
 def _safetensors_load_device() -> str:
     return os.environ.get("SAFETENSORS_LOAD_DEVICE", "cpu")
+
+
+def _release_safetensors_load_cache() -> None:
+    device = torch.device(_safetensors_load_device())
+    if device.type == "cpu":
+        return
+    torch.accelerator.synchronize(device)
+    torch.accelerator.empty_cache()
 
 
 def _drop_safetensors_page_cache(path: str) -> None:
