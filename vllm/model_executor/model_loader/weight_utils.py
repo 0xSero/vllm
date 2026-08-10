@@ -1049,6 +1049,21 @@ def safetensors_weights_iterator(
                         continue
                     param = f.get_tensor(name)
                     yield name, param
+        _drop_safetensors_page_cache(st_file)
+
+
+def _drop_safetensors_page_cache(path: str) -> None:
+    if os.environ.get("SAFETENSORS_DROP_PAGE_CACHE") != "1":
+        return
+    if not hasattr(os, "posix_fadvise") or not hasattr(os, "POSIX_FADV_DONTNEED"):
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.posix_fadvise(descriptor, 0, 0, os.POSIX_FADV_DONTNEED)
+    except OSError as exc:
+        logger.warning("Failed to evict safetensors page cache for %s: %s", path, exc)
+    finally:
+        os.close(descriptor)
 
 
 def multi_thread_safetensors_weights_iterator(
