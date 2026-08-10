@@ -28,9 +28,20 @@ class InklingNvfp4Config:
 
     @staticmethod
     def _is_nvfp4(quant_cfg: dict) -> bool:
-        wq = quant_cfg["modelopt_quant_config"]["quant_cfg"]["*weight_quantizer"]
+        modelopt = quant_cfg.get("modelopt_quant_config")
+        if not isinstance(modelopt, dict):
+            return False
+        quantizers = modelopt.get("quant_cfg")
+        if not isinstance(quantizers, dict):
+            return False
+        wq = quantizers.get("*weight_quantizer")
+        if not isinstance(wq, dict):
+            return False
+        block_sizes = wq.get("block_sizes")
+        if not isinstance(block_sizes, dict):
+            return False
         return tuple(wq["num_bits"]) == (2, 1) and tuple(
-            wq["block_sizes"].get("scale_bits", [])
+            block_sizes.get("scale_bits", [])
         ) == (4, 3)
 
     @classmethod
